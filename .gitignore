@@ -1,0 +1,12 @@
+data/raw/
+data/mock/
+data/splits.json
+outputs/
+*.nii
+*.nii.gz
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+.ipynb_checkpoints/

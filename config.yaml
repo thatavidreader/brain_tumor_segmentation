@@ -1,0 +1,76 @@
+# =========================================================
+# Brain Tumor Segmentation - Central Configuration
+# All hyperparameters, paths, and run settings live here so
+# scripts stay argument-free and reproducible.
+# =========================================================
+
+paths:
+  data_dir: "data/raw"              # expects <data_dir>/<case_id>/<case_id>_{flair,t1,t1ce,t2,seg}.nii.gz
+  mock_data_dir: "data/mock"        # synthetic dataset used for pipeline smoke-testing
+  split_file: "data/splits.json"    # generated train/val/test case-id lists
+  checkpoint_dir: "outputs/checkpoints"
+  log_dir: "outputs/logs"
+  vis_dir: "outputs/visualizations"
+  eval_dir: "outputs/evaluation"
+
+data:
+  modalities: ["flair", "t1", "t1ce", "t2"]
+  in_channels: 4
+  # BraTS raw labels: 0 background, 1 necrotic core, 2 edema, 4 enhancing tumor
+  # Remapped to 3 overlapping binary channels for sigmoid output:
+  #   channel 0: Whole Tumor (WT)   = labels {1, 2, 4}
+  #   channel 1: Tumor Core (TC)    = labels {1, 4}
+  #   channel 2: Enhancing Tumor(ET)= labels {4}
+  out_channels: 3
+  class_names: ["WT", "TC", "ET"]
+  spacing: [1.0, 1.0, 1.0]
+  orientation: "RAS"
+  intensity_norm: "nonzero_mean_std"   # per-channel z-score over non-zero voxels
+  patch_size: [128, 128, 128]
+  train_val_test_split: [0.7, 0.15, 0.15]
+  cache_rate: 0.5                       # fraction of dataset cached in RAM (MONAI CacheDataset)
+  num_workers: 4
+
+train:
+  seed: 42
+  epochs: 200
+  batch_size: 2
+  val_interval: 5
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  optimizer: "AdamW"
+  lr_scheduler: "cosine"
+  samples_per_case: 4            # positive/negative crops per volume (RandCropByPosNegLabeld)
+  pos_neg_ratio: [1, 1]          # pos:neg sampling ratio for foreground-biased crops
+  amp: true                      # automatic mixed precision
+  grad_clip_norm: 1.0
+  early_stopping_patience: 30
+
+model:
+  name: "AttentionUnet"
+  in_channels: 4
+  out_channels: 3
+  channels: [32, 64, 128, 256, 320]
+  strides: [2, 2, 2, 2]
+  dropout: 0.1
+
+loss:
+  name: "DiceFocalLoss"
+  sigmoid: true                  # nested/overlapping WT/TC/ET classes -> multi-label sigmoid
+  lambda_dice: 1.0
+  lambda_focal: 1.0
+  focal_gamma: 2.0
+  smooth_nr: 1.0e-5
+  smooth_dr: 1.0e-5
+
+inference:
+  sliding_window_roi: [128, 128, 128]
+  sw_batch_size: 4
+  overlap: 0.5
+  mode: "gaussian"
+  prediction_threshold: 0.5
+
+mock_data:
+  num_cases: 6
+  volume_shape: [128, 128, 96]
+  seed: 0
