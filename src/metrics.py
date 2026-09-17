@@ -34,7 +34,10 @@ class SegmentationMetrics:
         """
         self.dice_metric(y_pred=pred, y=target)
         self.iou_metric(y_pred=pred, y=target)
-        self.hd95_metric(y_pred=pred, y=target)
+        # HD95's edge-detection step uses cucim/cupy on GPU tensors, whose JIT
+        # compiler is broken on some environments (e.g. Kaggle's CUDA/cupy
+        # version mismatch) - compute on CPU instead, which uses plain scipy.
+        self.hd95_metric(y_pred=pred.cpu(), y=target.cpu())
 
     def aggregate(self) -> dict[str, Any]:
         dice_per_class = self.dice_metric.aggregate()
