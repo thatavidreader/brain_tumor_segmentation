@@ -80,8 +80,22 @@ def train(config: dict) -> None:
     best_dice = -1.0
     epochs_without_improvement = 0
     history = {"train_loss": [], "val_loss": [], "val_dice": []}
+    start_epoch = 1
 
-    for epoch in range(1, config["train"]["epochs"] + 1):
+    resume_path = Path(config["paths"]["checkpoint_dir"]) / "last_checkpoint.pth"
+    if resume_path.exists():
+        ckpt = torch.load(resume_path, map_location=device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        scaler.load_state_dict(ckpt["scaler_state_dict"])
+        best_dice = ckpt["best_dice"]
+        epochs_without_improvement = ckpt["epochs_without_improvement"]
+        history = ckpt["history"]
+        start_epoch = ckpt["epoch"] + 1
+        print(f"Resuming from checkpoint: epoch {start_epoch}, best_dice={best_dice:.4f}")
+
+    for epoch in range(start_epoch, config["train"]["epochs"] + 1):
         model.train()
         epoch_loss = 0.0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{config['train']['epochs']}")
@@ -108,6 +122,20 @@ def train(config: dict) -> None:
         avg_train_loss = epoch_loss / len(train_loader)
         history["train_loss"].append(avg_train_loss)
         print(f"Epoch {epoch}: train_loss={avg_train_loss:.4f}")
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "scaler_state_dict": scaler.state_dict(),
+                "best_dice": best_dice,
+                "epochs_without_improvement": epochs_without_improvement,
+                "history": history,
+            },
+            resume_path,
+        )
 
         if epoch % config["train"]["val_interval"] == 0:
             val_results = validate(model, val_loader, loss_fn, metrics, device, config)
