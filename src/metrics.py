@@ -9,6 +9,7 @@ from typing import Any
 
 import torch
 from monai.metrics import ConfusionMatrixMetric, DiceMetric, HausdorffDistanceMetric, MeanIoU
+from monai.metrics.confusion_matrix import get_confusion_matrix
 
 
 class SegmentationMetrics:
@@ -21,17 +22,17 @@ class SegmentationMetrics:
         self.hd95_metric = HausdorffDistanceMetric(
             include_background=True, percentile=95, reduction="mean_batch"
         )
-        self.confusion_metric = ConfusionMatrixMetric(
-            include_background=True,
-            metric_name=["tp", "fp", "fn", "tn", "accuracy"],
-            reduction="mean_batch",
+        self.accuracy_metric = ConfusionMatrixMetric(
+            include_background=True, metric_name="accuracy", reduction="mean_batch"
         )
+        self.raw_confusion: list[torch.Tensor] = []  # each item: (B, C, 4) = [tp, fp, tn, fn]
 
     def reset(self) -> None:
         self.dice_metric.reset()
         self.iou_metric.reset()
         self.hd95_metric.reset()
-        self.confusion_metric.reset()
+        self.accuracy_metric.reset()
+        self.raw_confusion = []
 
     def update(self, pred: torch.Tensor, target: torch.Tensor) -> None:
         """
@@ -44,13 +45,17 @@ class SegmentationMetrics:
         # compiler is broken on some environments (e.g. Kaggle's CUDA/cupy
         # version mismatch) - compute on CPU instead, which uses plain scipy.
         self.hd95_metric(y_pred=pred.cpu(), y=target.cpu())
-        self.confusion_metric(y_pred=pred, y=target)
+        self.accuracy_metric(y_pred=pred, y=target)
+        self.raw_confusion.append(get_confusion_matrix(y_pred=pred, y=target, include_background=True))
 
     def aggregate(self) -> dict[str, Any]:
         dice_per_class = self.dice_metric.aggregate()
         iou_per_class = self.iou_metric.aggregate()
         hd95_per_class = self.hd95_metric.aggregate()
-        tp, fp, fn, tn, accuracy = self.confusion_metric.aggregate()
+        accuracy = self.accuracy_metric.aggregate()
+        # (N, C, 4) across all update() calls -> mean over cases -> (C, 4) = [tp, fp, tn, fn]
+        confusion_per_class = torch.cat(self.raw_confusion, dim=0).mean(dim=0)
+        tp, fp, tn, fn = confusion_per_class.unbind(dim=-1)
 
         results: dict[str, Any] = {}
         for i, name in enumerate(self.class_names):
