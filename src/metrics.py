@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-from monai.metrics import DiceMetric, HausdorffDistanceMetric, MeanIoU
+from monai.metrics import ConfusionMatrixMetric, DiceMetric, HausdorffDistanceMetric, MeanIoU
 
 
 class SegmentationMetrics:
@@ -21,11 +21,17 @@ class SegmentationMetrics:
         self.hd95_metric = HausdorffDistanceMetric(
             include_background=True, percentile=95, reduction="mean_batch"
         )
+        self.confusion_metric = ConfusionMatrixMetric(
+            include_background=True,
+            metric_name=["tp", "fp", "fn", "tn", "accuracy"],
+            reduction="mean_batch",
+        )
 
     def reset(self) -> None:
         self.dice_metric.reset()
         self.iou_metric.reset()
         self.hd95_metric.reset()
+        self.confusion_metric.reset()
 
     def update(self, pred: torch.Tensor, target: torch.Tensor) -> None:
         """
@@ -38,11 +44,13 @@ class SegmentationMetrics:
         # compiler is broken on some environments (e.g. Kaggle's CUDA/cupy
         # version mismatch) - compute on CPU instead, which uses plain scipy.
         self.hd95_metric(y_pred=pred.cpu(), y=target.cpu())
+        self.confusion_metric(y_pred=pred, y=target)
 
     def aggregate(self) -> dict[str, Any]:
         dice_per_class = self.dice_metric.aggregate()
         iou_per_class = self.iou_metric.aggregate()
         hd95_per_class = self.hd95_metric.aggregate()
+        tp, fp, fn, tn, accuracy = self.confusion_metric.aggregate()
 
         results: dict[str, Any] = {}
         for i, name in enumerate(self.class_names):
@@ -50,9 +58,15 @@ class SegmentationMetrics:
             results[f"iou_{name}"] = float(iou_per_class[i])
             hd95_val = float(hd95_per_class[i])
             results[f"hd95_{name}"] = hd95_val if hd95_val == hd95_val else float("nan")  # keep NaN visible
+            results[f"tp_{name}"] = float(tp[i])
+            results[f"fp_{name}"] = float(fp[i])
+            results[f"fn_{name}"] = float(fn[i])
+            results[f"tn_{name}"] = float(tn[i])
+            results[f"accuracy_{name}"] = float(accuracy[i])
 
         results["mean_dice"] = float(dice_per_class.mean())
         results["mean_iou"] = float(iou_per_class.mean())
         finite_hd95 = hd95_per_class[torch.isfinite(hd95_per_class)]
         results["mean_hd95"] = float(finite_hd95.mean()) if len(finite_hd95) else float("nan")
+        results["mean_accuracy"] = float(accuracy.mean())
         return results
