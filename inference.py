@@ -58,11 +58,18 @@ def run_inference(config: dict, checkpoint_path: str, case_dir: str, case_id: st
     processed = transforms(data_item)
     image = processed["image"].unsqueeze(0).to(device)  # add batch dim -> (1, C, D, H, W)
 
-    # original affine/header for saving the prediction back in patient space
-    import nibabel as nib
-
-    ref_nii = nib.load(data_item[modalities[0]])
-    affine = ref_nii.affine
+    # Affine after reorientation/resampling (matches the prediction's voxel grid) -
+    # using the raw file's original affine here would mismatch the reoriented data.
+    ref_transform = Compose(
+        [
+            LoadImaged(keys=[modalities[0]], image_only=True),
+            EnsureChannelFirstd(keys=[modalities[0]]),
+            Orientationd(keys=[modalities[0]], axcodes=config["data"]["orientation"]),
+            Spacingd(keys=[modalities[0]], pixdim=config["data"]["spacing"], mode="bilinear"),
+        ]
+    )
+    ref_processed = ref_transform({modalities[0]: data_item[modalities[0]]})
+    affine = ref_processed[modalities[0]].affine.numpy()
 
     model = build_model(config).to(device)
     ckpt = torch.load(checkpoint_path, map_location=device)
@@ -87,10 +94,23 @@ def run_inference(config: dict, checkpoint_path: str, case_dir: str, case_id: st
     save_nifti(pred_seg, affine, out_path)
     print(f"Saved prediction NIfTI -> {out_path}")
 
-    # Optional visualization if a ground-truth segmentation is available
+    # Optional visualization if a ground-truth segmentation is available.
+    # The GT must go through the same Orientationd/Spacingd pipeline as the
+    # image so it lines up voxel-for-voxel with the prediction - loading it
+    # raw (different orientation/spacing) makes plot_slice_comparison's
+    # "largest-tumor slice" index point to the wrong slice in the prediction.
     gt_path = _find_volume_file(case_dir, case_id, "seg")
     if gt_path:
-        gt_seg = nib.load(gt_path).get_fdata().astype("uint8")
+        label_transform = Compose(
+            [
+                LoadImaged(keys=["label"], image_only=True),
+                EnsureChannelFirstd(keys=["label"]),
+                Orientationd(keys=["label"], axcodes=config["data"]["orientation"]),
+                Spacingd(keys=["label"], pixdim=config["data"]["spacing"], mode="nearest"),
+            ]
+        )
+        gt_tensor = label_transform({"label": gt_path})["label"]
+        gt_seg = gt_tensor.squeeze(0).numpy().astype("uint8")
         image_np = image[0, 0].cpu().numpy()
         fig_path = Path(out_dir) / f"{case_id}_comparison.png"
         plot_slice_comparison(image_np, gt_seg, pred_seg, out_path=fig_path, title=f"Inference: {case_id}")
